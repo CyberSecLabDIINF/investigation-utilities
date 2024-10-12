@@ -1,0 +1,7 @@
+
+
+# Ignore all pcap files
+*.pcap
+
+# Ignore all csv files
+*.csv
