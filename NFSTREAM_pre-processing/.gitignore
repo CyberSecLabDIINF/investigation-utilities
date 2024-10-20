@@ -1,0 +1,12 @@
+# Python trash
+venv/
+*.pyc
+*.pyo
+
+# Editor trash
+.vscode
+.idea
+
+# Data
+*.csv
+*.pcap
