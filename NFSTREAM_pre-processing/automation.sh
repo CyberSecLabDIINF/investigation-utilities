@@ -22,6 +22,12 @@ show_error() {
 # Function to activate virtual environment
 activate_virtual_environment() {
     echo "Activating the virtual environment"
+    # Temporary save the current directory
+    current_dir=$(pwd)
+    # Cd into the directory of the script if not already in it
+    if [ "$(basename "$(pwd)")" != "NFSTREAM_pre-processing" ]; then
+        cd "$(dirname "$0")" || show_error "Failed to change directory"
+    fi
     # Check if the virtual environment directory is found
     if [ ! -d "venv" ]; then
         show_error "Virtual environment directory not found"
@@ -34,11 +40,19 @@ activate_virtual_environment() {
     else
         show_error "Failed to activate virtual environment"
     fi
+    # Cd back to the original directory
+    cd "$current_dir" || show_error "Failed to change directory"
 }
 
 # Function to install dependencies
 install_dependencies() {
     echo "Installing python dependencies"
+    # Temporary save the current directory
+    current_dir=$(pwd)
+    # Cd into the directory of the script if not already in it
+    if [ "$(basename "$(pwd)")" != "NFSTREAM_pre-processing" ]; then
+        cd "$(dirname "$0")" || show_error "Failed to change directory"
+    fi
     # Create a virtual environment
     python3 -m venv venv || show_error "Failed to create virtual environment"
     # Check if the virtual environment directory is found
@@ -55,16 +69,39 @@ install_dependencies() {
     fi
     # Deactivate the virtual environment
     deactivate
+    # Cd back to the original directory
+    cd "$current_dir" || show_error "Failed to change directory"
+}
+
+# 
+process_files() {
+    # Encuentra recursivamente todos los archivos .pcap dentro de la carpeta de origen
+    find "$1" -type f -name "*.pcap" | while read -r file; do
+        action "$file" "$1"
+    done
 }
 
 # Action to be performed on each file
 action() {
     file=$1
+    pcaps_folder=$2
     echo "Processing file: $file"
-    # Extract the name of the file
+    
+    # Extrae la ruta relativa completa a partir de pcaps_folder
+    relative_path="${file#$pcaps_folder/}"
+    relative_dir=$(dirname "$relative_path")
     name=$(basename "$file" .pcap)
-    # Run the Python script with the provided arguments
-    python3 nfs-preprocesser.py -i "$file" -o "CSVs/$name.csv"
+
+    # Construye la estructura completa en CSVs, comenzando con el directorio final de pcaps_folder
+    target_dir="$csvs_folder/$(basename "$pcaps_folder")/$relative_dir"
+    mkdir -p "$target_dir" || show_error "Failed to create directory structure in CSVs"
+
+    # Procesa el archivo y genera el CSV en la estructura de subcarpetas
+    if [ "$(basename "$(pwd)")" = "NFSTREAM_pre-processing" ]; then
+        python3 nfs-preprocesser.py -i "$file" -o "$target_dir/$name.csv"
+    else
+        python3 investigation-utilities/NFSTREAM_pre-processing/nfs-preprocesser.py -i "$file" -o "$target_dir/$name.csv"
+    fi
 }
 
 # -------------------------------------- SCRIPT --------------------------------------
@@ -76,6 +113,7 @@ fi
 
 # Default values
 pcaps_folder="PCAPs"
+csvs_folder="/mnt/s/Programacion/Investigacion-Redes/investigation-utilities/NFSTREAM_pre-processing/CSVs"
 install_deps=false
 file_extension=".pcap"
 
@@ -107,13 +145,16 @@ if [ ! -d "$pcaps_folder" ]; then
     show_error "PCAPs folder not found"
 fi
 
+# Check if the CSVs folder exists
+if [ ! -d "$csvs_folder" ]; then
+    mkdir "$csvs_folder" || show_error "Failed to create CSVs folder"
+fi
+
 # Activate the virtual environment
 activate_virtual_environment
 
 # Process each file in the PCAPs folder
-for file in "$pcaps_folder"/*"$file_extension"; do
-    action "$file"
-done
+process_files "$pcaps_folder"
 
 # Deactivate the virtual environment
 deactivate
