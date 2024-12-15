@@ -1,0 +1,110 @@
+name: Sync Fork
+
+# Variables a configurar
+# - ORIGINAL_REPO: Repositorio original al que se desea sincronizar
+# - SYNC_BRANCHES: Ramas a sincronizar (opcional, por defecto todas)
+# Ejemplo:
+# vars:
+#   ORIGINAL_REPO: "owner/repo"
+#   SYNC_BRANCHES: "main feature/*"
+
+# Secretos requeridos
+# - SYNC_TOKEN: Token de GitHub con permisos de escritura
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'  # Todos los domingos a las 00:00 UTC
+
+env:
+  ORIGINAL_REPOSITORY: ${{ vars.ORIGINAL_REPO }}  # Ejemplo: "owner/repo"
+  SYNC_BRANCHES: ${{ vars.SYNC_BRANCHES || '*' }}  # '*' para todas las ramas, o lista específica
+
+jobs:
+  sync-fork:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout fork repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all branches and history
+
+    - name: Configure Git
+      run: |
+        git config --global user.name 'GitHub Sync Bot'
+        git config --global user.email 'sync-bot@github.com'
+
+    - name: Add original repository as remote
+      run: |
+        git remote add upstream https://github.com/${{ env.ORIGINAL_REPOSITORY }}.git
+        git fetch upstream
+
+    - name: Sync branches
+      env:
+        GITHUB_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      run: |
+        # Función para manejar sincronización de rama con detección de conflictos
+        sync_branch() {
+          local BRANCH=$1
+          echo "Sincronizando rama: $BRANCH"
+          
+          # Cambiar a la rama local correspondiente o crearla si no existe
+          git checkout $BRANCH 2>/dev/null || git checkout -b $BRANCH upstream/$BRANCH
+          
+          # Intentar merge y capturar su estado
+          if ! git merge upstream/$BRANCH; then
+            # Si hay conflictos, marcar para PR
+            echo "CONFLICTS_DETECTED=true" >> $GITHUB_ENV
+            echo "CONFLICT_BRANCH=$BRANCH" >> $GITHUB_ENV
+            
+            # Revertir el merge fallido
+            git merge --abort
+          else
+            # Si no hay conflictos, pushear cambios directamente
+            git push origin $BRANCH
+          fi
+        }
+        
+        # Si SYNC_BRANCHES es '*', obtener todas las ramas del repositorio original
+        if [ "${{ env.SYNC_BRANCHES }}" == "*" ]; then
+          BRANCHES=$(git branch -r | grep 'upstream/' | grep -v 'HEAD\|main\|master' | sed 's|upstream/||g')
+        else
+          BRANCHES="${{ env.SYNC_BRANCHES }}"
+        fi
+        
+        # Resetear variable de conflictos
+        echo "CONFLICTS_DETECTED=false" >> $GITHUB_ENV
+        
+        # Sincronizar cada rama
+        for BRANCH in $BRANCHES; do
+          sync_branch $BRANCH
+        done
+
+    - name: Create Pull Request if Conflicts Detected
+      if: env.CONFLICTS_DETECTED == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      run: |
+        # Crear rama de conflictos
+        git checkout -b sync-conflicts-${{ env.CONFLICT_BRANCH }}
+        
+        # Intentar merge nuevamente para tener cambios en la rama
+        git merge upstream/${{ env.CONFLICT_BRANCH }}
+        
+        # Pushear rama de conflictos
+        git push origin sync-conflicts-${{ env.CONFLICT_BRANCH }}
+        
+        # Crear Pull Request
+        gh pr create \
+          --base ${{ env.CONFLICT_BRANCH }} \
+          --head sync-conflicts-${{ env.CONFLICT_BRANCH }} \
+          --title "Sync Conflicts: ${{ env.CONFLICT_BRANCH }}" \
+          --body "Automatic Pull Request due to merge conflicts during upstream synchronization.
+
+        Conflicts detected while trying to merge upstream changes into ${{ env.CONFLICT_BRANCH }}.
+        
+        Manual resolution is required."
